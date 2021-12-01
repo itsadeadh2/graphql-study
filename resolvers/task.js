@@ -1,22 +1,91 @@
-const { tasks, users } = require("../constants");
-const uuid = require("uuid");
+const Task = require('../database/models/task');
+const User = require('../database/models/user');
+const { combineResolvers } = require('graphql-resolvers');
+const { isAuthenticated, isTaskOwner } = require('./middleware');
+const { stringToBase64, base64ToString } = require('../helper');
 
 module.exports = {
     Query: {
-        tasks: () => tasks,
-        task: (_, { id }) => tasks.find((task) => task.id === id),
+        tasks: combineResolvers(isAuthenticated, async (_, { cursor, limit=5 }, { loggedInUserId }) => {
+            try {
+                const query = { user: loggedInUserId }
+                if (cursor) {
+                    query['_id'] = {
+                        '$lt': base64ToString(cursor)
+                    }
+                }
+                let tasks = await Task
+                    .find(query)
+                    .sort({ _id: -1 })
+                    .limit(limit + 1);
+                const hasNextPage = tasks.length > limit;
+                tasks = hasNextPage ? tasks.slice(0, -1) : tasks;
+                return {
+                    taskFeed: tasks,
+                    pageInfo: {
+                        nextPageCursor: hasNextPage ? stringToBase64(tasks[tasks.length - 1].id) : null,
+                        hasNextPage
+                    }
+                };
+            } catch (error) {
+                console.log(error);
+                throw error;
+            }
+
+        }),
+        task: combineResolvers(isAuthenticated, isTaskOwner, async (_, { id }) => {
+            try {
+                return Task.findById(id);
+            } catch (error) {
+                console.log(error);
+                throw error;
+            }
+        }),
     },
     Mutation: {
-        createTask: (_, { input }) => {
-            const task = {...input, id: uuid.v4() };
-            tasks.push(task);
-            return task;
-        }
+        createTask: combineResolvers(isAuthenticated, async (_, { input }, { email }) => {
+            try {
+                const user = await User.findOne({ email });
+                if (!user) throw new Error(`User not found!`);
+                const task = new Task({ ...input, user: user.id });
+                const result = await task.save();
+                user.tasks.push(result.id);
+                await user.save();
+                return result;
+            } catch (error) {
+                console.log(error);
+                throw error;
+            }
+
+        }),
+        updateTask: combineResolvers(isAuthenticated, isTaskOwner, async (_, { id, input }) => {
+            try {
+                return Task.findByIdAndUpdate(id, { ...input }, { new: true });
+            } catch (error) {
+                console.log(error);
+                throw error;
+            }
+        }),
+        deleteTask: combineResolvers(isAuthenticated, isTaskOwner, async (_, { id }, { loggedInUserId }) => {
+            try {
+                const task = await Task.findByIdAndDelete(id);
+                await User.updateOne({ _id: loggedInUserId }, { $pull: { tasks: task.id } });
+                return task;
+            } catch (error) {
+                console.log(error);
+                throw error;
+            }
+        })
     },
     Task: {
-        user: ({ userId }) => {
-            console.log("Executed the user resolver!")
-            return users.find((user) => user.id === userId)
+        user: async ({ user }, _, { loaders }) => {
+            try {
+                const fetchedUser = await loaders.user.load(user.toString());
+                return fetchedUser;
+            } catch (error) {
+                console.log(error);
+                throw error;
+            }
         },
     },
 }
