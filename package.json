@@ -8,7 +8,7 @@
     "dev": "nodemon server.js"
   },
   "keywords": [],
-  "author": "Development Tooling <dev+development-tooling@axur.com>",
+  "author": "Thiago Barbosa",
   "license": "ISC",
   "dependencies": {
     "apollo-server-core": "^3.5.0",
